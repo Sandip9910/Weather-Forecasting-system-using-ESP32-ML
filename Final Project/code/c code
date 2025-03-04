@@ -1,0 +1,211 @@
+/* Fill-in information from Blynk Device Info here */
+#define BLYNK_TEMPLATE_ID "TMPL3kuGCIdfa"
+#define BLYNK_TEMPLATE_NAME "Weather Monitoring System"
+
+/* Comment this out to disable prints and save space */
+#define BLYNK_PRINT Serial
+
+// Include the library files
+#include <LiquidCrystal_I2C.h>
+#include <Wire.h>
+#include <WiFi.h>
+#include <WiFiClient.h>
+// #include <BlynkSimpleEsp32.h>
+#include <BlynkSimpleEsp32.h>
+#include <DHT.h>
+#include <SFE_BMP180.h>
+
+#define LDR 4
+#define TH 5
+#define Rain 36
+#define Soil 34 // Updated to a valid GPIO for ESP32
+
+// Create variables for pressure
+double T, P;
+char status;
+
+// Initialize the LCD display
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// Create an object for the BMP180 sensor
+SFE_BMP180 bmp;
+
+DHT dht(TH, DHT11);
+BlynkTimer timer;
+
+// Enter your Auth token
+char auth[] = "16r9pXye6EVNFlrSmgb6VoRvyUng5pyO";
+
+// Enter your WIFI SSID and password
+char ssid[] = "Failure";
+char pass[] = "1234567891";
+
+
+// Declare the WidgetLED globally
+WidgetLED LED(V5);
+
+// Global variable for device state
+bool deviceOn = false; // Initially off
+
+
+
+// secsors data collect function start
+
+// Get the DHT11 sensor values
+void DHT11sensor() {
+  if (!deviceOn) return;
+
+  float h = dht.readHumidity();
+  float t = dht.readTemperature();
+
+  if (isnan(h) || isnan(t)) {
+    Serial.println("Failed to read from DHT sensor!");
+    return;
+  }
+  Blynk.virtualWrite(V0, t);
+  Blynk.virtualWrite(V1, h);
+
+  lcd.setCursor(0, 0);
+  lcd.print("T:");
+  lcd.print(t, 1);
+  lcd.print("C ");
+  lcd.print("H:");
+  lcd.print(h, 1);
+  lcd.print("%");
+
+  // Serial.print("Humidity");
+  // Serial.println(h);
+  // Serial.print("Temp:");
+  // Serial.print(t);
+}
+
+
+// Get the rain sensor values
+void rainSensor() {
+  if (!deviceOn) return;
+
+  int Rvalue = analogRead(Rain); // Read the raw sensor value
+  
+  // Convert to a percentage (assuming 0-4095 for a 12-bit ADC)
+  float rainPercentage = map(Rvalue, 0, 4095, 0, 100);
+  rainPercentage = (rainPercentage - 100) * -1; // Invert value
+  
+  // Convert percentage to millimeters (requires calibration)
+  float rainInMM = rainPercentage * 0.5; // Example conversion factor (adjust as needed)
+
+  // Send data to Blynk
+  Blynk.virtualWrite(V2, rainInMM);
+
+  // Display on LCD
+  lcd.setCursor(0, 1); // Move to the beginning of the second line
+  lcd.print("R:");
+  lcd.print(rainInMM);
+  lcd.print("mm  "); // Added spaces to clear any previous characters
+}
+
+// Get the soil moisture sensor values
+void soilMoistureSensor() {
+  if (!deviceOn) return;
+
+  int rawValue = analogRead(Soil);  // Read raw analog value
+  int moisture_mm = map(rawValue, 0, 4095, 0, 50);  // Adjust range based on calibration
+
+  Blynk.virtualWrite(V4, moisture_mm);  // Send value to Blynk in mm
+
+  lcd.setCursor(0, 1); // Move to a new position on the second line
+  lcd.print("S:");
+  lcd.print(moisture_mm);
+  lcd.print(" mm  "); // Added spaces to clear any previous characters
+}
+
+
+
+// Get the pressure values
+void pressure() {
+  if (!deviceOn) return;
+
+  if (bmp.startTemperature()) {
+    delay(5);
+    if (bmp.getTemperature(T)) {
+      if (bmp.startPressure(3)) {
+        delay(10);
+        if (bmp.getPressure(P, T)) {
+          Blynk.virtualWrite(V3, P);
+          lcd.setCursor(8, 1);
+          lcd.print("P:");
+          lcd.print(P, 1);
+          lcd.print("Pa");
+        }
+      }
+    }
+  }
+}
+
+
+
+
+// Get the LDR sensor values
+void LDRsensor() {
+  if (!deviceOn) return;
+
+  bool value = digitalRead(LDR);
+  if (value == HIGH) {
+    LED.on();
+  } else {
+    LED.off();
+  }
+}
+
+// secsors data collect function end
+
+
+void setup() {
+  // Debug console
+  Serial.begin(115200);
+
+  // Initialize Blynk connection
+  Blynk.begin(auth, ssid, pass, "blynk.cloud", 80);
+
+  // Initialize sensors and LCD
+  if (!bmp.begin()) {
+    Serial.println("Could not find BMP180 or BMP085 sensor!");
+    while (1);
+  }
+  dht.begin();
+  lcd.begin();
+  lcd.backlight();
+
+  // Configure GPIO pins
+  pinMode(LDR, INPUT);
+  pinMode(Rain, INPUT);
+  pinMode(Soil, INPUT);
+  analogReadResolution(12);
+
+  // Display loading message
+  lcd.setCursor(0, 0);
+  lcd.print("System Loading");
+  delay(2000);
+  lcd.clear();
+
+  // Schedule periodic tasks
+  timer.setInterval(2000L, DHT11sensor);        // Run every 2 seconds
+  timer.setInterval(3000L, rainSensor);        // Run every 3 seconds
+  timer.setInterval(1000L, pressure);          // Run every 1 second
+  timer.setInterval(5000L, soilMoistureSensor); // Run every 5 seconds
+  timer.setInterval(1000L, LDRsensor);         // Run every 1 second
+}
+
+// Blynk virtual pin handler for the device switch
+BLYNK_WRITE(V6) {
+  int pinValue = param.asInt();
+  deviceOn = (pinValue == 1);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(deviceOn ? "Device: ON" : "Device: OFF");
+  Serial.println(deviceOn ? "Device turned ON" : "Device turned OFF");
+}
+
+void loop() {
+  Blynk.run();
+  timer.run();
+}
